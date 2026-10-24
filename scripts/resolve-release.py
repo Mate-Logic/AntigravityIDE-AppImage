@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Resolve, download, and fingerprint the current official Linux package.
 
-The download page is the source of truth.  Google does not publish a checksum
-for this archive, so the workflow fingerprints the bytes it downloads and then
-passes that digest to appimage-python, which verifies its own download before
-building.  A release is considered unchanged only when its source digest is
-available in the latest release.
+The official IDE update service is the source of truth, with the download
+page as a fallback.  When the update service publishes a SHA-256 for the
+archive, the downloaded bytes must match it.  The workflow then passes that
+digest to appimage-python, which verifies its own download before building.  A
+release is considered unchanged only when its source digest is available in the
+latest release.
 """
 
 from __future__ import annotations
@@ -19,9 +20,14 @@ import re
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
+UPDATE_API = (
+    "https://antigravity-ide-auto-updater-974169037036.us-central1.run.app"
+    "/api/update/linux-x64/stable/latest"
+)
 DOWNLOAD_PAGE = "https://antigravity.google/download?os=linux"
 SECTION_ID = "antigravity-ide"
 STANDALONE = True
@@ -133,6 +139,31 @@ def request_text(url: str) -> bytes:
     return gzip.decompress(data) if data.startswith(b"\x1f\x8b") else data
 
 
+def resolve_from_update_api() -> tuple[str, str, str]:
+    """Return the URL, version, and vendor SHA-256 of the latest stable IDE.
+
+    This is the endpoint the Antigravity desktop app uses to install the IDE,
+    so it is updated before the statically rendered download page.
+    """
+    release = json.loads(request_text(UPDATE_API))
+    url = quote(release.get("url", ""), safe=":/%")
+    match = re.search(r"/stable/(\d+(?:\.\d+)+)-\d+/linux-x64/", url)
+    if not match or not url.endswith(".tar.gz"):
+        raise RuntimeError(f"Unexpected response from the IDE update service: {release}")
+    return url, match.group(1), (release.get("sha256hash") or "").lower()
+
+
+def resolve_from_download_page() -> tuple[str, str, str]:
+    parser = DownloadParser(SECTION_ID, standalone=STANDALONE)
+    parser.feed(request_text(DOWNLOAD_PAGE).decode("utf-8"))
+    if not parser.download_url or not parser.version:
+        raise RuntimeError(
+            f"Could not find the current Linux x64 package in '{SECTION_ID}' "
+            "on the download page"
+        )
+    return parser.download_url, parser.version, ""
+
+
 def latest_source_hash() -> str | None:
     if "/" not in REPOSITORY:
         return None
@@ -163,21 +194,23 @@ def output(name: str, value: str) -> None:
 
 
 def main() -> int:
-    parser = DownloadParser(SECTION_ID, standalone=STANDALONE)
-    parser.feed(request_text(DOWNLOAD_PAGE).decode("utf-8"))
-    if not parser.download_url or not parser.version:
-        raise RuntimeError(
-            f"Could not find the current Linux x64 package in '{SECTION_ID}' "
-            "on the download page"
-        )
+    try:
+        download_url, version, vendor_digest = resolve_from_update_api()
+    except (HTTPError, URLError, OSError, RuntimeError, ValueError) as error:
+        print(f"WARNING: update service failed ({error}); using the download page", file=sys.stderr)
+        download_url, version, vendor_digest = resolve_from_download_page()
 
     archive = Path.cwd() / "source" / "Antigravity.tar.gz"
     archive.parent.mkdir(parents=True, exist_ok=True)
-    archive.write_bytes(request(parser.download_url))
+    archive.write_bytes(request(download_url))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if vendor_digest and digest != vendor_digest:
+        raise RuntimeError(
+            f"Downloaded archive SHA-256 {digest} does not match the vendor checksum {vendor_digest}"
+        )
 
-    output("download_url", parser.download_url)
-    output("version", parser.version)
+    output("download_url", download_url)
+    output("version", version)
     output("sha256", digest)
     output("archive_path", str(archive))
     output("changed", str(digest.lower() != (latest_source_hash() or "").lower()).lower())

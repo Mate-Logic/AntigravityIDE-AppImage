@@ -1,13 +1,13 @@
 # AntigravityIDE AppImage
 
-[![Build and publish](https://github.com/tyvsmith/Antigravity-AppImage/actions/workflows/release.yml/badge.svg)](https://github.com/tyvsmith/Antigravity-AppImage/actions/workflows/release.yml)
+[![Build and publish](https://github.com/Mate-Logic/AntigravityIDE-AppImage/actions/workflows/release.yml/badge.svg)](https://github.com/Mate-Logic/AntigravityIDE-AppImage/actions/workflows/release.yml)
 
 An unofficial, community-maintained AppImage distribution of the Google
 Antigravity IDE for Linux x86_64.
 
 ## Download
 
-Download the [latest release](https://github.com/tyvsmith/Antigravity-AppImage/releases/latest).
+Download the [latest release](https://github.com/Mate-Logic/AntigravityIDE-AppImage/releases/latest).
 Every release contains the AppImage, its zsync update file, and SHA-256, MD5,
 and SHA-512 manifests. The release notes also contain a checksum table for each
 published AppImage asset.
@@ -29,18 +29,20 @@ updaters can use the zsync asset from the latest GitHub release.
 
 The scheduled workflow runs every six hours and also supports manual runs. A
 manual run can set `force` to rebuild the current source and repair or refresh
-the latest release metadata. The workflow:
+the latest release metadata. Each run also re-enables its own schedule, because
+GitHub disables scheduled workflows after 60 days without repository activity.
+The workflow:
 
-1. Parses the official download page to find the current Linux x86_64 archive.
-2. Downloads the archive and computes its SHA-256 digest.
+1. Asks the official IDE update service (the one the Antigravity app uses) for the current Linux x86_64 archive, falling back to the official download page.
+2. Downloads the archive and checks it against the SHA-256 published by the update service.
 3. Compares that digest with the `SOURCE-SHA256` asset of the latest release.
 4. Stops without publishing when the source bytes have not changed.
 5. Passes the expected digest to [`appimage-python`](https://github.com/Mate-Logic/appimage-python), which verifies the archive it downloads before building.
-6. Publishes the AppImage, zsync file, checksum manifests, and a release checksum table.
+6. Publishes the AppImage, zsync file, checksum manifests, and a release checksum table in a release tagged with the upstream version, such as `v2.5.5`.
 
-Google currently does not publish a checksum for this archive. The source
-digest is therefore an identity for the exact bytes downloaded by this project,
-not an independently signed vendor attestation. A mismatch between the
+The IDE update service publishes a SHA-256 for the archive, and a download that
+does not match it fails the workflow. This is a vendor checksum, not a signed
+attestation. A mismatch between the
 workflow's preflight download and the builder's download fails the build rather
 than packaging unverified bytes.
 

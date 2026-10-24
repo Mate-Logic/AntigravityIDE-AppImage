@@ -19,10 +19,13 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      # Re-enabling the workflow keeps GitHub from disabling the schedule
+      # after 60 days without repository activity.
+      actions: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install libfuse2
         run: sudo apt-get update && sudo apt-get install -y libfuse2 imagemagick jq
       - name: Resolve official release
@@ -54,7 +57,7 @@ jobs:
           printf '%s  official-source.tar.gz\n' '${{ steps.source.outputs.sha256 }}' > dist/SOURCE-SHA256
       - name: Upload workflow artifact
         if: steps.source.outputs.changed == 'true' || inputs.force == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: AntigravityIDE-AppImage
           path: 'dist'
@@ -81,6 +84,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view latest >/dev/null 2>&1 || gh release create latest --title "Antigravity IDE ${{ steps.source.outputs.version }}" --notes-file RELEASE_NOTES.md
-          gh release edit latest --title "Antigravity IDE ${{ steps.source.outputs.version }}" --notes-file RELEASE_NOTES.md --latest
-          gh release upload latest dist/* --clobber
+          version='${{ steps.source.outputs.version }}'
+          tag="v$version"
+          title="Antigravity IDE $version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --title "$title" --notes-file RELEASE_NOTES.md --latest
+          else
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "$title" --notes-file RELEASE_NOTES.md --latest
+          fi
+      - name: Keep the scheduled workflow enabled
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/release.yml/enable"
